@@ -22,7 +22,7 @@ contract EcoDriveChallenge {
 
     uint256 public challengeCount;
     mapping(uint256 => Challenge) public challenges;
-    mapping(uint256 => mapping(string => Participant)) public participants;
+    mapping(uint256 => mapping(bytes32 => Participant)) public participants;
     mapping(uint256 => string[]) public participantAddresses;
 
     event ChallengeCreated(
@@ -111,23 +111,25 @@ contract EcoDriveChallenge {
         );
     }
 
-    function register(uint256 _challengeId, string memory _xrpAddress) public {
-    Challenge storage challenge = challenges[_challengeId];
-    require(challenge.isActive, "Challenge is not active");
-    require(block.timestamp < challenge.startTime, "Registration period is over");
-    require(!participants[_challengeId][_xrpAddress].hasParticipated, "Already registered");
+    function register(uint256 _challengeId, string memory _xrpAddress) public payable {
+        Challenge storage challenge = challenges[_challengeId];
+        require(challenge.isActive, "Challenge is not active");
+        require(msg.value == challenge.stakeAmount, "Incorrect stake amount");
 
-    participants[_challengeId][_xrpAddress] = Participant({
-        xrpAddress: _xrpAddress,
-        points: 0,
-        hasParticipated: true,
-        isWinner: false
-    });
-    participantAddresses[_challengeId].push(_xrpAddress);
+        bytes32 xrpAddressHash = keccak256(abi.encodePacked(_xrpAddress));
+        Participant storage participant = participants[_challengeId][xrpAddressHash];
+        require(!participant.hasParticipated, "Already registered");
 
-    emit ParticipantRegistered(_challengeId, _xrpAddress);
-}
+        participants[_challengeId][xrpAddressHash] = Participant({
+            xrpAddress: _xrpAddress,
+            points: 0,
+            hasParticipated: true,
+            isWinner: false
+        });
+        participantAddresses[_challengeId].push(_xrpAddress);
 
+        emit ParticipantRegistered(_challengeId, _xrpAddress);
+    }
 
     function getParticipants(uint256 _challengeId) public view returns (string[] memory) {
         require(_challengeId > 0 && _challengeId <= challengeCount, "Invalid challenge");
@@ -141,10 +143,10 @@ contract EcoDriveChallenge {
     ) public onlyOwner {
         Challenge storage challenge = challenges[_challengeId];
         require(challenge.isActive, "Challenge is not active");
-        require(block.timestamp <= challenge.endTime, "Challenge has ended");
         require(_points > 0, "Points must be greater than zero");
 
-        Participant storage participant = participants[_challengeId][_xrpAddress];
+        bytes32 xrpAddressHash = keccak256(abi.encodePacked(_xrpAddress));
+        Participant storage participant = participants[_challengeId][xrpAddressHash];
         require(participant.hasParticipated, "Participant not registered");
 
         participant.points += _points;
@@ -159,10 +161,10 @@ contract EcoDriveChallenge {
     ) public onlyOwner {
         Challenge storage challenge = challenges[_challengeId];
         require(challenge.isActive, "Challenge is not active");
-        require(block.timestamp <= challenge.endTime, "Challenge has ended");
         require(_points > 0, "Points must be greater than zero");
 
-        Participant storage participant = participants[_challengeId][_xrpAddress];
+        bytes32 xrpAddressHash = keccak256(abi.encodePacked(_xrpAddress));
+        Participant storage participant = participants[_challengeId][xrpAddressHash];
         require(participant.hasParticipated, "Participant not registered");
         require(participant.points >= _points, "Insufficient points to remove");
 
@@ -178,7 +180,9 @@ contract EcoDriveChallenge {
 
         string[] storage addresses = participantAddresses[_challengeId];
         for (uint256 i = 0; i < addresses.length; i++) {
-            Participant storage participant = participants[_challengeId][addresses[i]];
+            string storage xrpAddress = addresses[i];
+            bytes32 xrpAddressHash = keccak256(abi.encodePacked(xrpAddress));
+            Participant storage participant = participants[_challengeId][xrpAddressHash];
             if (participant.points >= challenge.minimumPoints) {
                 participant.isWinner = true;
             }
@@ -188,27 +192,32 @@ contract EcoDriveChallenge {
     }
 
     function getWinners(uint256 _challengeId) public view returns (string[] memory) {
-    Challenge storage challenge = challenges[_challengeId];
-    require(!challenge.isActive, "Challenge is still active");
+        string[] storage addresses = participantAddresses[_challengeId];
+        uint256 winnerCount = 0;
 
-    string[] memory tempWinners = new string[](participantAddresses[_challengeId].length);
-    uint256 count = 0;
-
-    for (uint256 i = 0; i < participantAddresses[_challengeId].length; i++) {
-        string memory addr = participantAddresses[_challengeId][i];
-        if (participants[_challengeId][addr].isWinner) {
-            tempWinners[count] = addr;
-            count++;
+        // First pass to count winners
+        for (uint256 i = 0; i < addresses.length; i++) {
+            string storage xrpAddress = addresses[i];
+            bytes32 xrpAddressHash = keccak256(abi.encodePacked(xrpAddress));
+            Participant storage participant = participants[_challengeId][xrpAddressHash];
+            if (participant.isWinner) {
+                winnerCount++;
+            }
         }
+
+        // Second pass to collect winner addresses
+        string[] memory winners = new string[](winnerCount);
+        uint256 index = 0;
+        for (uint256 i = 0; i < addresses.length; i++) {
+            string storage xrpAddress = addresses[i];
+            bytes32 xrpAddressHash = keccak256(abi.encodePacked(xrpAddress));
+            Participant storage participant = participants[_challengeId][xrpAddressHash];
+            if (participant.isWinner) {
+                winners[index] = participant.xrpAddress;
+                index++;
+            }
+        }
+
+        return winners;
     }
-
-    string[] memory winners = new string[](count);
-    for (uint256 j = 0; j < count; j++) {
-        winners[j] = tempWinners[j];
-    }
-
-    return winners;
-}
-
-
 }
